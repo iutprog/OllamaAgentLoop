@@ -36,9 +36,8 @@ import org.json.JSONObject;
  */
 public class OllamaAgentLoop {
 
-    //static final String OLLAMA_URL = "http://localhost:11434/api/chat"; // IPv4 localhost, for Intel Macs
-    static final String OLLAMA_URL = "http://[::1]:11434/api/chat";  // IPv6 localhost, for M1/M2 Macs
-    static final String MODEL = "llama3.2";
+    static final String OLLAMA_URL = "http://127.0.0.1:11436/api/chat";
+    static final String MODEL = "llama3.2:latest";
     static final int MAX_STEPS = 5; // the hard-cap stop condition
 
     public static void main(String[] args) throws Exception {
@@ -46,9 +45,9 @@ public class OllamaAgentLoop {
 
         // Step 1: state. This list is the entire memory of the agent.
         List<Object> messages = new ArrayList<>();
-        messages.add(new JSONObject().put("role", "user").put("content", "What time is it right now?"));
+        messages.add(new JSONObject().put("role", "user").put("content", "What is 7 plus 5?"));
 
-        // The one tool this agent is allowed to use.
+        // The tools this agent is allowed to use.
         JSONArray tools = new JSONArray().put(new JSONObject()
                 .put("type", "function")
                 .put("function", new JSONObject()
@@ -57,7 +56,18 @@ public class OllamaAgentLoop {
                         .put("parameters", new JSONObject()
                                 .put("type", "object")
                                 .put("properties", new JSONObject())
-                                .put("required", new JSONArray()))));
+                                .put("required", new JSONArray()))))
+                        .put(new JSONObject()
+                            .put("type", "function")
+                            .put("function", new JSONObject()
+                                .put("name", "add_numbers")
+                                .put("description", "Add two numbers together")
+                                .put("parameters", new JSONObject()
+                                    .put("type", "object")
+                                    .put("properties", new JSONObject()
+                                        .put("a", new JSONObject().put("type", "number"))
+                                        .put("b", new JSONObject().put("type", "number")))
+                                    .put("required", new JSONArray().put("a").put("b")))));
 
         for (int step = 1; step <= MAX_STEPS; step++) {
             System.out.println("--- step " + step + " ---");
@@ -77,10 +87,12 @@ public class OllamaAgentLoop {
 
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-            // Uncomment while debugging to see the raw shape Ollama actually returns:
-            // System.out.println(response.body());
-
             JSONObject responseJson = new JSONObject(response.body());
+            if (response.statusCode() < 200 || response.statusCode() >= 300 || !responseJson.has("message")) {
+                String error = responseJson.optString("error", response.body());
+                throw new IllegalStateException("Ollama request failed (HTTP "
+                        + response.statusCode() + "): " + error);
+            }
             JSONObject message = responseJson.getJSONObject("message");
 
             // Step 3: parse — tool call, or final answer?
@@ -97,7 +109,8 @@ public class OllamaAgentLoop {
                     String toolName = call.getJSONObject("function").getString("name");
 
                     // Step 4: YOUR code executes the tool. The model cannot do this itself.
-                    String result = executeTool(toolName);
+                    JSONObject arguments = call.getJSONObject("function").optJSONObject("arguments");
+                    String result = executeTool(toolName, arguments);
                     System.out.println("executed tool: " + toolName + " -> " + result);
 
                     // Step 5: feed the observation back in.
@@ -113,11 +126,22 @@ public class OllamaAgentLoop {
         System.out.println("Stopped: max iterations (" + MAX_STEPS + ") reached.");
     }
 
-    static String executeTool(String name) {
+    static String executeTool(String name, JSONObject arguments) {
         if (name.equals("get_current_time")) {
             return LocalDateTime.now().toString();
         }
 
+        if (name.equals("add_numbers")) {
+            if (arguments == null) {
+                return "Error: add_numbers requires arguments a and b";
+            }
+            return Double.toString(addNumbers(arguments.getDouble("a"), arguments.getDouble("b")));
+        }
+
         return "Error: unknown tool " + name;
+    }
+
+    static double addNumbers(double a, double b) {
+        return a + b;
     }
 }
