@@ -39,6 +39,7 @@ public class OllamaAgentLoop {
     static final String OLLAMA_URL = "http://127.0.0.1:11436/api/chat";
     static final String MODEL = "llama3.2:latest";
     static final int MAX_STEPS = 5; // the hard-cap stop condition
+    static final int MAX_HISTORY_MESSAGES = 20;
 
     public static void main(String[] args) throws Exception {
         HttpClient client = HttpClient.newHttpClient();
@@ -69,8 +70,10 @@ public class OllamaAgentLoop {
                                         .put("b", new JSONObject().put("type", "number")))
                                     .put("required", new JSONArray().put("a").put("b")))));
 
-        for (int step = 1; step <= MAX_STEPS; step++) {
+        for (int step = 1; step <= MAX_STEPS; step++) { 
             System.out.println("--- step " + step + " ---");
+
+            trimHistory(messages);
 
             // Step 2: call the model with current state + tools.
             JSONObject requestBody = new JSONObject()
@@ -124,6 +127,23 @@ public class OllamaAgentLoop {
         }
 
         System.out.println("Stopped: max iterations (" + MAX_STEPS + ") reached.");
+    }
+
+    static void trimHistory(List<Object> messages) {
+        while (messages.size() > MAX_HISTORY_MESSAGES && messages.size() > 1) {
+            int end = 2;
+            JSONObject oldest = (JSONObject) messages.get(1);
+            if ("assistant".equals(oldest.optString("role"))
+                    && oldest.optJSONArray("tool_calls") != null
+                    && oldest.optJSONArray("tool_calls").length() > 0) {
+                end = 2;
+                while (end < messages.size()
+                        && "tool".equals(((JSONObject) messages.get(end)).optString("role"))) {
+                    end++;
+                }
+            }
+            messages.subList(1, Math.min(end, messages.size())).clear();
+        }
     }
 
     static String executeTool(String name, JSONObject arguments) {
